@@ -1783,7 +1783,10 @@ body{
       .then(function (d) {
         if (d.progress && (+d.progress.total || 0) > state.total + 1) {
           applyProgress(d.progress);
+          syncState.last = Date.now();
+          syncState.error = '';
           toast('Прогресс загружен из облака ☁️', 'good');
+          updateAccount();
           return true;
         }
         return false;
