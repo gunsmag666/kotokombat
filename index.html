@@ -254,6 +254,8 @@ body{
   border:1px solid var(--panel-brd);font-size:.8rem}
 .rank-row.me{background:linear-gradient(90deg, rgba(255,200,87,.2), rgba(139,92,246,.14));
   border-color:rgba(255,200,87,.42);box-shadow:0 0 22px -8px rgba(255,200,87,.55)}
+.rank-row.online{border-color:rgba(56,189,248,.38)}
+.rank-row.online .rank-name{color:#a8dcff}
 .rank-pos{width:20px;flex:0 0 20px;text-align:center;font-weight:900;color:var(--muted);font-size:.72rem}
 .rank-ico{font-size:1rem;line-height:1}
 .rank-name{flex:1 1 auto;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -295,6 +297,22 @@ body{
 .modal-text b{color:#a7f3d0}
 .modal-amount{font-size:1.5rem;font-weight:900;color:var(--gold);margin:12px 0 4px;font-variant-numeric:tabular-nums}
 .modal-card .btn{width:100%;padding:12px;border-radius:14px;margin-top:12px;font-size:.9rem}
+
+/* ---------- аккаунт / облако ---------- */
+.account{display:flex;align-items:center;gap:11px;padding:12px;border-radius:18px;
+  background:linear-gradient(140deg, rgba(56,189,248,.16), rgba(139,92,246,.14));
+  border:1px solid rgba(56,189,248,.34)}
+.account[hidden]{display:none}
+.account-ico{width:44px;height:44px;flex:0 0 44px;border-radius:14px;display:grid;place-items:center;font-size:1.2rem;
+  background:linear-gradient(145deg, rgba(56,189,248,.3), rgba(139,92,246,.26));border:1px solid rgba(255,255,255,.12)}
+.account-main{flex:1 1 auto;min-width:0}
+.account-title{font-size:.83rem;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.account-sub{font-size:.68rem;color:var(--muted);margin-top:3px;font-weight:600;line-height:1.3}
+.field{width:100%;margin-top:10px;padding:11px 13px;border-radius:13px;border:1px solid var(--panel-brd);
+  background:rgba(0,0,0,.3);color:var(--text);font-family:inherit;font-size:.88rem;font-weight:700;outline:none}
+.field:focus{border-color:rgba(255,200,87,.55);box-shadow:0 0 0 3px rgba(255,200,87,.12)}
+.field::placeholder{color:var(--muted);font-weight:600}
+.auth-err{min-height:16px;margin-top:8px;font-size:.72rem;font-weight:700;color:#ff9aa8;text-align:center}
 </style>
 </head>
 <body>
@@ -504,6 +522,15 @@ body{
 
   <!-- ===== ТОП ===== -->
   <section class="screen" id="scr-top">
+    <div class="account" id="accountCard" hidden>
+      <div class="account-ico">☁️</div>
+      <div class="account-main">
+        <div class="account-title" id="accTitle">Облачный прогресс</div>
+        <div class="account-sub" id="accSub">Один прогресс на всех устройствах</div>
+      </div>
+      <button class="btn btn-gold boost-btn" id="accBtn">Войти</button>
+    </div>
+
     <div class="sec-title">🏆 Топ котозаработков</div>
     <div class="rank-list" id="rankList"></div>
 
@@ -574,6 +601,20 @@ body{
       <button class="btn btn-ghost" id="prCancel">Позже</button>
     </div>
   </div>
+
+  <div class="modal" id="authModal">
+    <div class="modal-card">
+      <div class="modal-ico">☁️</div>
+      <div class="modal-title">Облачный прогресс</div>
+      <div class="modal-text">Ник и PIN — чтобы играть с одного прогресса на телефоне и компьютере. Если в облаке уже есть сохранение побольше — оно заменит местное.</div>
+      <input class="field" id="authNick" maxlength="20" placeholder="Ник" autocomplete="username" />
+      <input class="field" id="authPin" maxlength="40" type="password" placeholder="PIN (4+ символа)" autocomplete="current-password" />
+      <div class="auth-err" id="authErr"></div>
+      <button class="btn btn-gold" id="authLogin">Войти</button>
+      <button class="btn btn-ghost" id="authRegister">Создать аккаунт</button>
+      <button class="btn btn-ghost" id="authCancel">Отмена</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -590,6 +631,11 @@ body{
   var BASE_ENERGY = 1000, BASE_REGEN = 3, ENERGY_PER_TAP = 1;
   var PRESTIGE_MIN = 1000000, SOUL_BONUS = 0.1;
   var SHARE_REWARD = 10000;
+
+  // Адрес Cloudflare Worker с API (см. kotokombat-backend/README-BACKEND.md).
+  // Пусто = облако выключено, игра работает как раньше.
+  var API_BASE = 'https://kotokombat-api.gunsmag666.workers.dev';
+  var SYNC_EVERY = 15; // секунд между автосохранениями в облако
 
   var LEAGUES = [
     { name: 'Бродяга',            gen: 'Бродяги',            icon: '🐈', at: 0 },
@@ -671,6 +717,7 @@ body{
     return {
       v: 2, coins: 0, total: 0, lifetime: 0, taps: 0, crits: 0, energy: BASE_ENERGY, up: up,
       souls: 0, prestiges: 0, ach: {}, friends: {}, shared: false,
+      account: { nick: '', token: '' },
       dailyAt: 0, refillAt: 0, turboAt: 0, turboUntil: 0,
       lastSeen: Date.now(), sound: true, name: 'Игрок'
     };
@@ -703,6 +750,9 @@ body{
       st.souls = Math.max(0, Math.floor(+st.souls || 0));
       st.prestiges = Math.max(0, Math.floor(+st.prestiges || 0));
       st.shared = !!st.shared;
+      if (!st.account || typeof st.account !== 'object') st.account = { nick: '', token: '' };
+      st.account.nick = String(st.account.nick || '').slice(0, 20);
+      st.account.token = String(st.account.token || '');
     } catch (e) { /* повреждённое сохранение — начинаем заново */ }
     return st;
   }
@@ -1364,22 +1414,39 @@ body{
     }
   }
 
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
   function renderLeaderboard() {
     var wrap = el('rankList');
     var rows = [];
-    for (var i = 0; i < BOTS.length; i++) {
-      rows.push({ name: BOTS[i].n, icon: BOTS[i].i, score: BOTS[i].s, me: false });
+    var i;
+
+    for (i = 0; i < BOTS.length; i++) {
+      rows.push({ name: BOTS[i].n, icon: BOTS[i].i, score: BOTS[i].s, me: false, online: false });
     }
-    rows.push({ name: state.name || 'Ты', icon: '😼', score: state.total, me: true });
+
+    var myNick = (state.account && state.account.nick) ? state.account.nick : '';
+    rows.push({ name: myNick || state.name || 'Ты', icon: '😼', score: state.total, me: true, online: !!myNick });
+
+    for (i = 0; i < remoteTop.length; i++) {
+      var p = remoteTop[i];
+      if (myNick && p.nick === myNick) continue;
+      rows.push({ name: p.nick, icon: '🌐', score: p.total, me: false, online: true });
+    }
+
     rows.sort(function (a, b) { return b.score - a.score; });
 
     var html = '';
-    for (var k = 0; k < rows.length; k++) {
+    for (var k = 0; k < rows.length && k < 40; k++) {
       var r = rows[k];
-      html += '<div class="rank-row' + (r.me ? ' me' : '') + '">' +
+      html += '<div class="rank-row' + (r.me ? ' me' : '') + (r.online ? ' online' : '') + '">' +
               '<div class="rank-pos">' + (k + 1) + '</div>' +
               '<div class="rank-ico">' + r.icon + '</div>' +
-              '<div class="rank-name">' + r.name + (r.me ? ' (ты)' : '') + '</div>' +
+              '<div class="rank-name">' + esc(r.name) + (r.me ? ' (ты)' : '') + '</div>' +
               '<div class="rank-score">' + fmt(r.score) + '</div>' +
               '</div>';
     }
@@ -1606,8 +1673,225 @@ body{
     });
   }
 
+  /* ============================ ОБЛАЧНЫЙ ПРОГРЕСС ============================ */
+  var remoteTop = [];
+  var syncState = { busy: false, last: 0, error: '' };
+
+  function apiBase() {
+    try {
+      var q = new URLSearchParams(location.search).get('api');
+      if (q) localStorage.setItem('kotokombat_api', q);
+      var saved = localStorage.getItem('kotokombat_api');
+      if (saved) return String(saved).replace(/\/+$/, '');
+    } catch (e) {}
+    return String(API_BASE || '').replace(/\/+$/, '');
+  }
+
+  function apiReady() { return !!apiBase(); }
+
+  function apiCall(method, path, body) {
+    var base = apiBase();
+    if (!base) return Promise.reject(new Error('облако не настроено'));
+    var headers = { 'Content-Type': 'application/json' };
+    if (state.account && state.account.token) headers.Authorization = 'Bearer ' + state.account.token;
+    var opts = { method: method, headers: headers };
+    if (body !== undefined) opts.body = JSON.stringify(body);
+    return fetch(base + path, opts).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (data) {
+        if (!res.ok) {
+          var err = new Error(data.error || ('HTTP ' + res.status));
+          err.code = res.status;
+          throw err;
+        }
+        return data;
+      });
+    });
+  }
+
+  function progressPayload() {
+    return {
+      coins: state.coins, total: state.total, lifetime: state.lifetime,
+      taps: state.taps, crits: state.crits, energy: state.energy,
+      souls: state.souls, prestiges: state.prestiges, shared: state.shared,
+      name: state.name, up: state.up, friends: state.friends, ach: state.ach
+    };
+  }
+
+  function applyProgress(p) {
+    if (!p || typeof p !== 'object') return;
+    var num = function (v) { var x = Number(v); return (isFinite(x) && x > 0) ? x : 0; };
+
+    state.coins = num(p.coins);
+    state.total = num(p.total);
+    state.lifetime = Math.max(num(p.lifetime), state.total);
+    state.taps = Math.floor(num(p.taps));
+    state.crits = Math.floor(num(p.crits));
+    state.souls = Math.floor(num(p.souls));
+    state.prestiges = Math.floor(num(p.prestiges));
+    state.shared = !!p.shared;
+    if (typeof p.name === 'string' && p.name) state.name = p.name;
+
+    if (p.up && typeof p.up === 'object') {
+      for (var i = 0; i < UPGRADES.length; i++) {
+        var id = UPGRADES[i].id;
+        state.up[id] = Math.max(0, Math.floor(num(p.up[id])));
+      }
+    }
+    if (p.friends && typeof p.friends === 'object') state.friends = p.friends;
+    if (p.ach && typeof p.ach === 'object') state.ach = p.ach;
+
+    recalc();
+    var e = Number(p.energy);
+    state.energy = (isFinite(e) && e >= 0) ? Math.min(e, d.maxE) : d.maxE;
+
+    prCache = '';
+    for (var k in refsF) refsF[k].last = '';
+
+    var nameEl = el('playerName');
+    if (nameEl) nameEl.textContent = state.name || 'Игрок';
+
+    updateWallet(); updateEnergy(); updateUpgrades(true); updateBoosts();
+    updateFriends(); updatePrestige(); updateAchBadge(); renderLeaderboard(); updateStats();
+    updateAccount();
+    save();
+  }
+
+  function syncPush(force) {
+    if (!apiReady() || !state.account || !state.account.token) return;
+    if (syncState.busy) return;
+    if (!force && Date.now() - syncState.last < SYNC_EVERY * 1000) return;
+
+    syncState.busy = true;
+    apiCall('PUT', '/api/progress', { progress: progressPayload() })
+      .then(function () {
+        syncState.last = Date.now();
+        syncState.error = '';
+      })
+      .catch(function (err) {
+        syncState.error = (err && err.code === 429) ? '' : ((err && err.message) || 'сеть');
+        if (err && err.code === 401) logout(true);
+      })
+      .then(function () {
+        syncState.busy = false;
+        updateAccount();
+      });
+  }
+
+  function syncPull() {
+    if (!apiReady() || !state.account || !state.account.token) return Promise.resolve(false);
+    return apiCall('GET', '/api/progress')
+      .then(function (d) {
+        if (d.progress && (+d.progress.total || 0) > state.total + 1) {
+          applyProgress(d.progress);
+          toast('Прогресс загружен из облака ☁️', 'good');
+          return true;
+        }
+        return false;
+      })
+      .catch(function (err) {
+        if (err && err.code === 401) logout(true);
+        return false;
+      });
+  }
+
+  function timeStr(ts) {
+    var t = new Date(ts);
+    var h = t.getHours(), m = t.getMinutes();
+    return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
+  }
+
+  function updateAccount() {
+    var card = el('accountCard');
+    if (!card) return;
+    if (!apiReady()) { card.hidden = true; return; }
+    card.hidden = false;
+
+    var btn = el('accBtn');
+    if (state.account && state.account.token) {
+      setText('accTitle', '☁️ ' + (state.account.nick || 'аккаунт'));
+      if (syncState.busy) setText('accSub', 'Синхронизация…');
+      else if (syncState.error) setText('accSub', 'Ошибка: ' + syncState.error);
+      else if (syncState.last) setText('accSub', 'Синхронизировано в ' + timeStr(syncState.last));
+      else setText('accSub', 'Ждёт синхронизации');
+      if (btn.textContent !== 'Выйти') btn.textContent = 'Выйти';
+    } else {
+      setText('accTitle', '☁️ Облачный прогресс');
+      setText('accSub', 'Один прогресс на телефоне и компьютере');
+      if (btn.textContent !== 'Войти') btn.textContent = 'Войти';
+    }
+  }
+
+  function openAuth() {
+    var nickEl = el('authNick');
+    if (nickEl && !nickEl.value) nickEl.value = (state.name && state.name !== 'Игрок') ? state.name : '';
+    setText('authErr', '');
+    el('authModal').classList.add('show');
+    setTimeout(function () {
+      try { (nickEl.value ? el('authPin') : nickEl).focus(); } catch (e) {}
+    }, 130);
+  }
+
+  function doAuth(mode) {
+    var nick = (el('authNick').value || '').trim();
+    var pin = el('authPin').value || '';
+    if (!nick || pin.length < 4) {
+      setText('authErr', 'Ник и PIN (4+ символа) обязательны');
+      sfxError();
+      return;
+    }
+
+    setText('authErr', '');
+    el('authLogin').disabled = true;
+    el('authRegister').disabled = true;
+    var done = function () {
+      el('authLogin').disabled = false;
+      el('authRegister').disabled = false;
+    };
+
+    apiCall('POST', '/api/' + (mode === 'register' ? 'register' : 'login'), { nick: nick, pin: pin })
+      .then(function (d) {
+        state.account = { nick: d.nick, token: d.token };
+        state.name = d.nick;
+        save();
+        el('playerName').textContent = d.nick;
+        el('authModal').classList.remove('show');
+        el('authPin').value = '';
+        renderLeaderboard();
+        updateAccount();
+        toast(mode === 'register' ? 'Аккаунт создан ☁️' : 'Вход выполнен ☁️', 'good');
+        return syncPull().then(function (loaded) {
+          if (!loaded) syncPush(true);
+          fetchTop();
+        });
+      })
+      .catch(function (err) {
+        setText('authErr', (err && err.message) || 'не получилось');
+        sfxError();
+      })
+      .then(done);
+  }
+
+  function logout(silent) {
+    state.account = { nick: '', token: '' };
+    save();
+    remoteTop = [];
+    updateAccount();
+    renderLeaderboard();
+    if (!silent) toast('Вышли из аккаунта', 'warn');
+  }
+
+  function fetchTop() {
+    if (!apiReady()) { remoteTop = []; return; }
+    apiCall('GET', '/api/top?limit=20')
+      .then(function (d) {
+        remoteTop = (d.players || []).slice(0, 20);
+        renderLeaderboard();
+      })
+      .catch(function () {});
+  }
+
   /* ============================ ЦИКЛ ============================ */
-  var last = performance.now(), uiAcc = 0, saveAcc = 0, achAcc = 0;
+  var last = performance.now(), uiAcc = 0, saveAcc = 0, achAcc = 0, syncAcc = 0;
   var running = true;
 
   function loop(now) {
@@ -1630,6 +1914,10 @@ body{
       updatePrestige();
     }
     if (achAcc >= 1) { achAcc = 0; checkAch(); }
+    if (syncAcc >= 3) {
+      syncAcc = 0;
+      if (state.account && state.account.token) { syncPush(false); updateAccount(); }
+    }
     if (saveAcc >= 2) { saveAcc = 0; save(); }
 
     requestAnimationFrame(loop);
@@ -1641,7 +1929,7 @@ body{
     for (var i = 0; i < tabs.length; i++) tabs[i].classList.toggle('active', tabs[i].getAttribute('data-tab') === name);
     var screens = document.querySelectorAll('.screen');
     for (var j = 0; j < screens.length; j++) screens[j].classList.toggle('active', screens[j].id === 'scr-' + name);
-    if (name === 'top') { renderLeaderboard(); updateStats(); refreshInstall(); }
+    if (name === 'top') { renderLeaderboard(); updateStats(); refreshInstall(); fetchTop(); updateAccount(); }
     if (name === 'boost') updateBoosts();
     if (name === 'friends') updateFriends();
     if (name === 'up') updatePrestige();
@@ -1716,6 +2004,20 @@ body{
     el('achBtn').addEventListener('click', openAch);
     el('achClose').addEventListener('click', function () { el('achModal').classList.remove('show'); });
     el('installBtn').addEventListener('click', doInstall);
+
+    el('accBtn').addEventListener('click', function () {
+      if (state.account && state.account.token) logout(false);
+      else openAuth();
+    });
+    el('authLogin').addEventListener('click', function () { doAuth('login'); });
+    el('authRegister').addEventListener('click', function () { doAuth('register'); });
+    el('authCancel').addEventListener('click', function () { el('authModal').classList.remove('show'); });
+    el('authModal').addEventListener('click', function (e) {
+      if (e.target === el('authModal')) el('authModal').classList.remove('show');
+    });
+    el('authPin').addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') doAuth('login');
+    });
 
     el('achModal').addEventListener('click', function (e) {
       if (e.target === el('achModal')) el('achModal').classList.remove('show');
@@ -1793,8 +2095,12 @@ body{
     el('soundBtn').textContent = state.sound ? '🔊' : '🔇';
     setupPWA();
     refreshInstall();
+    updateAccount();
     checkAch();
     updateWallet();
+    if (state.account && state.account.token) {
+      syncPull().then(function (got) { if (!got) syncPush(true); fetchTop(); });
+    }
     last = performance.now();
     requestAnimationFrame(loop);
   }
