@@ -729,7 +729,7 @@ html.tg .modal{padding-bottom:calc(20px + env(safe-area-inset-bottom))}
     return {
       v: 2, coins: 0, total: 0, lifetime: 0, taps: 0, crits: 0, energy: BASE_ENERGY, up: up,
       souls: 0, prestiges: 0, ach: {}, friends: {}, shared: false,
-      account: { nick: '', token: '' },
+      account: { nick: '', token: '', tgLinked: false },
       dailyAt: 0, refillAt: 0, turboAt: 0, turboUntil: 0,
       lastSeen: Date.now(), sound: true, name: 'Игрок'
     };
@@ -765,6 +765,7 @@ html.tg .modal{padding-bottom:calc(20px + env(safe-area-inset-bottom))}
       if (!st.account || typeof st.account !== 'object') st.account = { nick: '', token: '' };
       st.account.nick = String(st.account.nick || '').slice(0, 20);
       st.account.token = String(st.account.token || '');
+      st.account.tgLinked = !!st.account.tgLinked;
     } catch (e) { /* повреждённое сохранение — начинаем заново */ }
     return st;
   }
@@ -1745,6 +1746,21 @@ html.tg .modal{padding-bottom:calc(20px + env(safe-area-inset-bottom))}
       });
   }
 
+  // Привязка текущего аккаунта к Telegram: после неё вход через Telegram
+  // на любом устройстве попадает в этот же аккаунт.
+  function tgLinkAccount() {
+    if (!isTg || !tgApp || !tgApp.initData) return;
+    if (!state.account || !state.account.token) return;
+    if (state.account.tgLinked) return;
+
+    apiCall('POST', '/api/tg-link', { initData: tgApp.initData })
+      .then(function () {
+        state.account.tgLinked = true;
+        save();
+      })
+      .catch(function () {});
+  }
+
   /* ============================ ОБЛАЧНЫЙ ПРОГРЕСС ============================ */
   var remoteTop = [];
   var syncState = { busy: false, last: 0, error: '' };
@@ -1951,6 +1967,7 @@ html.tg .modal{padding-bottom:calc(20px + env(safe-area-inset-bottom))}
         renderLeaderboard();
         updateAccount();
         toast(mode === 'register' ? 'Аккаунт создан ☁️' : 'Вход выполнен ☁️', 'good');
+        tgLinkAccount();
         return syncPull().then(function (loaded) {
           if (!loaded) syncPush(true);
           fetchTop();
@@ -2211,6 +2228,7 @@ html.tg .modal{padding-bottom:calc(20px + env(safe-area-inset-bottom))}
       syncPull().then(function (got) { if (!got) syncPush(true); fetchTop(); });
     }
     tgAutoLogin();
+    tgLinkAccount();
     last = performance.now();
     requestAnimationFrame(loop);
   }
