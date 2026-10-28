@@ -7,6 +7,7 @@
 <meta name="description" content="КОТОКОМБАТ — тапай кота и зарабатывай мур-коины." />
 <title>КОТОКОМБАТ 🐾 — тапай кота</title>
 <link rel="manifest" href="./manifest.json" />
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
 <link rel="icon" href="./icons/icon-192.png" sizes="192x192" type="image/png" />
 <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -316,6 +317,13 @@ body{
 .field:focus{border-color:rgba(255,200,87,.55);box-shadow:0 0 0 3px rgba(255,200,87,.12)}
 .field::placeholder{color:var(--muted);font-weight:600}
 .auth-err{min-height:16px;margin-top:8px;font-size:.72rem;font-weight:700;color:#ff9aa8;text-align:center}
+
+/* ---------- Telegram Mini App ---------- */
+html.tg body{padding:0}
+html.tg .app{height:100dvh;border-radius:0;border:0;box-shadow:none}
+html.tg .install-card{display:none!important}
+html.tg .topbar{padding-top:6px}
+html.tg .modal{padding-bottom:calc(20px + env(safe-area-inset-bottom))}
 </style>
 </head>
 <body>
@@ -1017,6 +1025,7 @@ body{
     recalc();
     if (u.kind === 'energy' && state.energy > d.maxE) state.energy = d.maxE;
     sfxBuy();
+    haptic('success');
     updateUpgrades(true);
     updateWallet();
     updateEnergy();
@@ -1570,9 +1579,11 @@ body{
       stage.classList.add('crit');
       setTimeout(function () { stage.classList.remove('crit'); }, 300);
       sfxCrit();
+      haptic('medium');
       if (navigator.vibrate) navigator.vibrate(25);
     } else {
       sfxTap(combo);
+      haptic('light');
       if (navigator.vibrate) navigator.vibrate(8);
     }
 
@@ -1633,6 +1644,7 @@ body{
     var btn = el('installBtn');
     var hint = el('installHint');
     var secure = (location.protocol === 'http:' || location.protocol === 'https:');
+    if (isTg) { card.hidden = true; return; }
     if (installPrompt) {
       card.hidden = false;
       btn.hidden = false;
@@ -1677,6 +1689,62 @@ body{
     });
   }
 
+  /* ============================ TELEGRAM MINI APP ============================ */
+  var tgApp = (window.Telegram && window.Telegram.WebApp) ? window.Telegram.WebApp : null;
+  var isTg = !!(tgApp && (String(tgApp.initData || '').length > 0 ||
+                          (tgApp.initDataUnsafe && tgApp.initDataUnsafe.user)));
+
+  function setupTelegram() {
+    if (!tgApp) return;
+    try { tgApp.ready(); } catch (e) {}
+    try { tgApp.expand(); } catch (e) {}
+    try { if (tgApp.disableVerticalSwipes) tgApp.disableVerticalSwipes(); } catch (e) {}
+    try { if (tgApp.setHeaderColor) tgApp.setHeaderColor('#0a0916'); } catch (e) {}
+    try { if (tgApp.setBackgroundColor) tgApp.setBackgroundColor('#0a0916'); } catch (e) {}
+    if (isTg) document.documentElement.classList.add('tg');
+  }
+
+  function haptic(kind) {
+    if (!tgApp || !tgApp.HapticFeedback) return;
+    try {
+      if (kind === 'success') tgApp.HapticFeedback.notificationOccurred('success');
+      else if (kind === 'error') tgApp.HapticFeedback.notificationOccurred('error');
+      else if (kind === 'medium') tgApp.HapticFeedback.impactOccurred('medium');
+      else tgApp.HapticFeedback.impactOccurred('light');
+    } catch (e) {}
+  }
+
+  function tgUserName() {
+    if (!tgApp || !tgApp.initDataUnsafe || !tgApp.initDataUnsafe.user) return '';
+    var u = tgApp.initDataUnsafe.user;
+    return String(u.username || u.first_name || '').trim().slice(0, 20);
+  }
+
+  function tgAutoLogin() {
+    if (!isTg || !tgApp || !tgApp.initData) return;
+    if (state.account && state.account.token) return;
+    if (!apiReady()) return;
+
+    apiCall('POST', '/api/tg-login', { initData: tgApp.initData })
+      .then(function (d) {
+        state.account = { nick: d.nick, token: d.token };
+        if (d.name) state.name = d.name;
+        save();
+        el('playerName').textContent = state.name || d.nick;
+        updateAccount();
+        renderLeaderboard();
+        toast('Вход через Telegram ☁️', 'good');
+        return syncPull().then(function (got) {
+          if (!got) syncPush(true);
+          fetchTop();
+        });
+      })
+      .catch(function (e) {
+        if (e && e.code === 409) toast('Ник занят — войди по нику и PIN', 'warn');
+        // 501 — на сервере не настроен бот, тихо остаёмся на обычном входе
+      });
+  }
+
   /* ============================ ОБЛАЧНЫЙ ПРОГРЕСС ============================ */
   var remoteTop = [];
   var syncState = { busy: false, last: 0, error: '' };
@@ -1715,7 +1783,7 @@ body{
   function progressPayload() {
     return {
       coins: state.coins, total: state.total, lifetime: state.lifetime,
-      taps: state.taps, crits: state.crits, energy: state.energy,
+      taps: state.taps, crits: state.crits,
       souls: state.souls, prestiges: state.prestiges, shared: state.shared,
       name: state.name, up: state.up, friends: state.friends, ach: state.ach
     };
@@ -1745,8 +1813,8 @@ body{
     if (p.ach && typeof p.ach === 'object') state.ach = p.ach;
 
     recalc();
-    var e = Number(p.energy);
-    state.energy = (isFinite(e) && e >= 0) ? Math.min(e, d.maxE) : d.maxE;
+    // энергия — локальный ресурс устройства, из облака её не переносим
+    if (state.energy > d.maxE) state.energy = d.maxE;
 
     prCache = '';
     for (var k in refsF) refsF[k].last = '';
@@ -1845,7 +1913,9 @@ body{
 
   function openAuth() {
     var nickEl = el('authNick');
-    if (nickEl && !nickEl.value) nickEl.value = (state.name && state.name !== 'Игрок') ? state.name : '';
+    if (nickEl && !nickEl.value) {
+      nickEl.value = tgUserName() || ((state.name && state.name !== 'Игрок') ? state.name : '');
+    }
     setText('authErr', '');
     el('authModal').classList.add('show');
     setTimeout(function () {
@@ -2114,6 +2184,7 @@ body{
   }
 
   function init() {
+    setupTelegram();
     recalc();
     initBoosts();
     buildUpgrades();
@@ -2139,6 +2210,7 @@ body{
     if (state.account && state.account.token) {
       syncPull().then(function (got) { if (!got) syncPush(true); fetchTop(); });
     }
+    tgAutoLogin();
     last = performance.now();
     requestAnimationFrame(loop);
   }
